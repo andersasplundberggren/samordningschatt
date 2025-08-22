@@ -222,4 +222,4 @@ Besvara användarens fråga baserat enbart på ovanstående enkätsvar.`;
 }
 
 // Alternativ export för olika plattformar
-module.exports = handler;
+
