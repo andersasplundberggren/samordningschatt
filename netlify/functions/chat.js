@@ -1,6 +1,5 @@
-// api/chat.js - För Railway/Vercel/Netlify backend
+// netlify/functions/chat.js
 
-// DIN KUNSKAPSTEXT - Ändra detta till dina enkätsvar
 const KNOWLEDGE_BASE = `
 Svar enkät 
 
@@ -89,51 +88,46 @@ Jag skulle vilja veta vilka förbättringar och effektiviseringar man hoppas ska
 Det står nämndsekreterare - jag är anställd som förvaltningssekreterare vilket inte riktigt är samma typ av tjänst. Skillnader: En förvaltningssekreterare arbetar mer generellt inom en förvaltnings administrativa stöd och har ett bredare uppdrag, medan en nämndsekreterare är mer fokuserad på det administrativa stödet till en specifik nämnd och dess politiker.
 Som förvaltningssekreterare så ser jag ett behov av att finnas nära förvaltningen som ett stöd. Om tanken är att vi fortsättningsvis ska vara just ett stöd till förvaltningen så ser jag inte vitsen med att sitta centralt. Om det däremot finns en annan tanke på sikt att stödet inte ska vara främst mot förvaltningen – så kan jag förstå vitsen med att placeras centralt.
 Jag kan se både fördelar och nackdelar med en omorganisation i detta läge- jag tar med dessa tankar till workshopen.
-
 `;
 
-// Hämta API-nyckel från miljövariabel (säkert!)
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+exports.handler = async (event, context) => {
+  // CORS headers
+  const headers = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS'
+  };
 
-// Huvudfunktion som hanterar chat-förfrågningar
-export default async function handler(req, res) {
-  // Hantera CORS (Cross-Origin Resource Sharing)
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-  // Hantera preflight-förfrågningar
-  if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return;
+  // Handle preflight
+  if (event.httpMethod === 'OPTIONS') {
+    return {
+      statusCode: 200,
+      headers,
+      body: ''
+    };
   }
 
-  // Endast POST-förfrågningar tillåtna
-  if (req.method !== 'POST') {
-    return res.status(405).json({ 
-      error: 'Endast POST-förfrågningar tillåtna' 
-    });
+  // Only POST allowed
+  if (event.httpMethod !== 'POST') {
+    return {
+      statusCode: 405,
+      headers,
+      body: JSON.stringify({ error: 'Endast POST tillåtet' })
+    };
   }
 
   try {
-    // Hämta meddelandet från användaren
-    const { message } = req.body;
+    const { message } = JSON.parse(event.body);
 
-    // Validera inkommande data
-    if (!message || typeof message !== 'string' || message.trim().length === 0) {
-      return res.status(400).json({ 
-        error: 'Meddelande krävs och får inte vara tomt' 
-      });
+    if (!message || typeof message !== 'string') {
+      return {
+        statusCode: 400,
+        headers,
+        body: JSON.stringify({ error: 'Meddelande krävs' })
+      };
     }
 
-    // Kontrollera att meddelandet inte är för långt
-    if (message.length > 1000) {
-      return res.status(400).json({ 
-        error: 'Meddelandet är för långt (max 1000 tecken)' 
-      });
-    }
-
-    // Skapa system-prompt för AI:n
+    // System prompt
     const systemPrompt = `Du är en hjälpsam assistent som analyserar enkätsvar om samordning. Du ska endast svara baserat på den information som finns i enkätsvaren nedan. 
 
 INSTRUKTIONER:
@@ -148,78 +142,48 @@ ${KNOWLEDGE_BASE}
 
 Besvara användarens fråga baserat enbart på ovanstående enkätsvar.`;
 
-    // Anropa OpenAI API
-    const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+    // OpenAI API call
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${OPENAI_API_KEY}`
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
       },
       body: JSON.stringify({
         model: 'gpt-3.5-turbo',
         messages: [
-          {
-            role: 'system',
-            content: systemPrompt
-          },
-          {
-            role: 'user',
-            content: message.trim()
-          }
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: message }
         ],
         max_tokens: 500,
-        temperature: 0.7,
-        presence_penalty: 0.1,
-        frequency_penalty: 0.1
+        temperature: 0.7
       })
     });
 
-    // Kontrollera om OpenAI-anropet lyckades
-    if (!openaiResponse.ok) {
-      console.error('OpenAI API fel:', openaiResponse.status, openaiResponse.statusText);
-      
-      if (openaiResponse.status === 401) {
-        return res.status(500).json({ 
-          error: 'API-konfigurationsfel. Kontakta administratören.' 
-        });
-      }
-      
-      return res.status(500).json({ 
-        error: 'AI-tjänsten är tillfälligt otillgänglig. Försök igen om en stund.' 
-      });
+    if (!response.ok) {
+      console.error('OpenAI API fel:', response.status);
+      return {
+        statusCode: 500,
+        headers,
+        body: JSON.stringify({ error: 'AI-tjänsten är inte tillgänglig' })
+      };
     }
 
-    const aiData = await openaiResponse.json();
+    const data = await response.json();
+    const aiResponse = data.choices[0].message.content;
 
-    // Kontrollera att vi fick ett svar från AI:n
-    if (!aiData.choices || !aiData.choices[0] || !aiData.choices[0].message) {
-      return res.status(500).json({ 
-        error: 'Oväntat svar från AI-tjänsten' 
-      });
-    }
-
-    const aiResponse = aiData.choices[0].message.content;
-
-    // Logga för debugging (ta bort i produktion om du vill)
-    console.log('Användare frågade:', message);
-    console.log('AI svarade:', aiResponse);
-
-    // Skicka tillbaka svaret
-    res.status(200).json({ 
-      response: aiResponse,
-      timestamp: new Date().toISOString()
-    });
+    return {
+      statusCode: 200,
+      headers,
+      body: JSON.stringify({ response: aiResponse })
+    };
 
   } catch (error) {
-    // Logga fel för debugging
-    console.error('Serverfel i chat.js:', error);
-
-    // Skicka generiskt felmeddelande till användaren
-    res.status(500).json({ 
-      error: 'Ett oväntat fel uppstod. Försök igen om en stund.' 
-    });
+    console.error('Serverfel:', error);
+    return {
+      statusCode: 500,
+      headers,
+      body: JSON.stringify({ error: 'Ett oväntat fel uppstod' })
+    };
   }
-}
-
-// Alternativ export för olika plattformar
-
+};
